@@ -1,0 +1,31 @@
+shader {
+    name: "My Shader"
+
+    sub_shader {
+        name: "Sub shader 1"
+        lod: 600
+
+        shader_features: [
+            "SHADER_FEATURE_NORMAL_MAPPING",
+            "SHADER_FEATURE_PARALLAX_OCCLUSION_MAPPING"
+        ]
+
+        render_queue: "Opaque"
+
+        include {
+
+        }
+
+        pass {
+            name: "My Pass"
+
+            vertex {
+
+            }
+
+            fragment {
+
+            }
+        }
+    }
+}

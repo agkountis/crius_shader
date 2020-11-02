@@ -1,0 +1,8 @@
+[package]
+name = "crius_shader"
+version = "0.1.0"
+authors = ["Angelos Gkountis <angelos.gkountis@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+nom = "~5.1.0"
