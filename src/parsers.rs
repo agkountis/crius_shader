@@ -2,12 +2,11 @@ use crate::*;
 
 use nom::{
     branch::{alt, permutation},
-    bytes::complete::{escaped, is_not, tag, take_until, take_while, take_while1},
+    bytes::complete::{escaped, is_not, tag, take_until},
     character::complete::{alphanumeric1, char, digit1, multispace0, one_of},
-    combinator::{cut, map, map_res, opt, recognize, value, verify},
-    dbg_dmp,
+    combinator::{cut, map, map_res, opt, value, verify},
     error::{context, ParseError, VerboseError},
-    multi::{many0, many1, separated_list},
+    multi::{many1, separated_list},
     number::complete::float,
     sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
