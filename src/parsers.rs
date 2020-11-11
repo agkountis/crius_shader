@@ -5,16 +5,17 @@ use nom::{
     bytes::complete::{escaped, is_not, tag, take_until},
     character::complete::{alphanumeric1, char, digit1, multispace0, one_of},
     combinator::{cut, map, map_res, opt, value, verify},
-    error::{context, ParseError, VerboseError},
-    multi::{many1, separated_list},
+    error::{context, ContextError, FromExternalError, ParseError, VerboseError},
+    multi::{many1, separated_list0},
     number::complete::float,
     sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
 };
+use std::num::ParseIntError;
 
-fn ws<'a, F: 'a, O, E>(inner: F) -> impl Fn(&'a str) -> IResult<&'a str, O, E>
+fn ws<'a, F, O, E>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
-    F: Fn(&'a str) -> IResult<&'a str, O, E>,
+    F: 'a + FnMut(&'a str) -> IResult<&'a str, O, E>,
     E: ParseError<&'a str>,
 {
     delimited(multispace0, inner, multispace0)
@@ -26,7 +27,7 @@ fn parse_esc_str<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str,
 
 pub fn string<'a, E>(i: &'a str) -> IResult<&'a str, &'a str, E>
 where
-    E: 'a + ParseError<&'a str>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     context(
         "string",
@@ -34,7 +35,10 @@ where
     )(i)
 }
 
-fn boolean<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, bool, E> {
+fn boolean<'a, E>(input: &'a str) -> IResult<&'a str, bool, E>
+where
+    E: 'a + ParseError<&'a str>,
+{
     let parse_true = value(true, tag("true"));
     let parse_false = value(false, tag("false"));
     alt((parse_true, parse_false))(input)
@@ -42,12 +46,12 @@ fn boolean<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, bool,
 
 fn float2<'a, E>(input: &'a str) -> IResult<&'a str, Vec<f32>, E>
 where
-    E: 'a + ParseError<&'a str>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     let vec2 = preceded(
         ws(tag("(")),
         cut(terminated(
-            verify(separated_list(ws(tag(",")), float), |list: &[f32]| {
+            verify(separated_list0(ws(tag(",")), float), |list: &[f32]| {
                 list.len() == 2
             }),
             ws(tag(")")),
@@ -59,12 +63,12 @@ where
 
 fn float3<'a, E>(input: &'a str) -> IResult<&'a str, Vec<f32>, E>
 where
-    E: 'a + ParseError<&'a str>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     let vec3 = preceded(
         ws(tag("(")),
         cut(terminated(
-            verify(separated_list(ws(tag(",")), float), |list: &[f32]| {
+            verify(separated_list0(ws(tag(",")), float), |list: &[f32]| {
                 list.len() == 3
             }),
             ws(tag(")")),
@@ -76,12 +80,12 @@ where
 
 fn float4<'a, E>(input: &'a str) -> IResult<&'a str, Vec<f32>, E>
 where
-    E: 'a + ParseError<&'a str>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     let vec4 = preceded(
         ws(tag("(")),
         cut(terminated(
-            verify(separated_list(ws(tag(",")), float), |list: &[f32]| {
+            verify(separated_list0(ws(tag(",")), float), |list: &[f32]| {
                 list.len() == 4
             }),
             ws(tag(")")),
@@ -108,20 +112,23 @@ fn multi_line_comment<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str
     )(i)
 }
 
-fn comment<'a, E: 'a + ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, (), E> {
+fn comment<'a, E>(input: &'a str) -> IResult<&'a str, (), E>
+where
+    E: 'a + ParseError<&'a str>,
+{
     let a = ws(single_line_comment);
     let b = ws(multi_line_comment);
     alt((a, b))(input)
 }
 
-fn parse_block<'a, F: 'a, O, E>(
+fn parse_block<'a, F, O, E>(
     open_tag: &'a str,
     inner: F,
     close_tag: &'a str,
-) -> impl Fn(&'a str) -> IResult<&'a str, O, E>
+) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
-    E: 'a + ParseError<&'a str>,
-    F: Fn(&'a str) -> IResult<&'a str, O, E>,
+    F: 'a + FnMut(&'a str) -> IResult<&'a str, O, E>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     context(
         "parse_block",
@@ -132,26 +139,26 @@ where
     )
 }
 
-fn block<'a, F, O, E>(parser: F) -> impl Fn(&'a str) -> IResult<&'a str, O, E>
+fn block<'a, F, O, E>(parser: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
-    E: 'a + ParseError<&'a str>,
-    F: 'a + Fn(&'a str) -> IResult<&'a str, O, E>,
+    F: 'a + FnMut(&'a str) -> IResult<&'a str, O, E>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     context("block", parse_block("(", parser, ")"))
 }
 
-fn string_block<'a, F: 'a, O, E>(inner: F) -> impl Fn(&'a str) -> IResult<&'a str, O, E>
+fn string_block<'a, F, O, E>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
-    E: 'a + ParseError<&'a str>,
-    F: Fn(&'a str) -> IResult<&'a str, O, E>,
+    F: 'a + FnMut(&'a str) -> IResult<&'a str, O, E>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     context("string_block", parse_block(r#"(""#, inner, r#"")"#))
 }
 
-fn named<'a, F: 'a, O, E>(name: &'a str, parser: F) -> impl Fn(&'a str) -> IResult<&'a str, O, E>
+fn named<'a, F, O, E>(name: &'a str, parser: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
-    E: 'a + ParseError<&'a str>,
-    F: Fn(&'a str) -> IResult<&'a str, O, E>,
+    F: 'a + FnMut(&'a str) -> IResult<&'a str, O, E>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     context("named", preceded(ws(tag(name)), parser))
 }
@@ -163,10 +170,10 @@ where
     take_until(r#"")"#)(input)
 }
 
-fn trim_ws<'a, F, E>(parser: F) -> impl Fn(&'a str) -> IResult<&'a str, String, E>
+fn trim_ws<'a, F, E>(parser: F) -> impl FnMut(&'a str) -> IResult<&'a str, String, E>
 where
-    E: 'a + ParseError<&'a str>,
-    F: 'a + Fn(&'a str) -> IResult<&'a str, &'a str, E>,
+    F: 'a + FnMut(&'a str) -> IResult<&'a str, &'a str, E>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     context(
         "trimmed_string",
@@ -178,9 +185,9 @@ where
     )
 }
 
-fn named_string_block<'a, E>(name: &'a str) -> impl Fn(&'a str) -> IResult<&'a str, String, E>
+fn named_string_block<'a, E>(name: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, String, E>
 where
-    E: 'a + ParseError<&'a str>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     named(name, string_block(trim_ws(string_block_contents)))
 }
@@ -189,7 +196,7 @@ fn optional_shader_source<'a, E>(
     input: &'a str,
 ) -> IResult<&'a str, Option<OptionalShaderSource>, E>
 where
-    E: 'a + ParseError<&'a str>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     let tesselation_ctrl = named_string_block(TESSELATION_CONTROL_SHADER_TAG);
     let tesselation_eval = named_string_block(TESSELATION_EVALUATION_SHADER_TAG);
@@ -214,7 +221,7 @@ where
 
 fn shader_sources<'a, E>(input: &'a str) -> IResult<&'a str, ShadersSources, E>
 where
-    E: 'a + ParseError<&'a str>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     map(
         permutation((
@@ -257,19 +264,19 @@ pub fn separated_value<'a, I, O1, O2, O3, E, F, G, H>(
     before: F,
     separator: G,
     value_parser: H,
-) -> impl Fn(I) -> IResult<I, O3, E>
+) -> impl FnMut(I) -> IResult<I, O3, E>
 where
     E: 'a + ParseError<I>,
-    F: Fn(I) -> IResult<I, O1, E>,
-    G: Fn(I) -> IResult<I, O2, E>,
-    H: Fn(I) -> IResult<I, O3, E>,
+    F: FnMut(I) -> IResult<I, O1, E>,
+    G: FnMut(I) -> IResult<I, O2, E>,
+    H: FnMut(I) -> IResult<I, O3, E>,
 {
     preceded(before, preceded(separator, value_parser))
 }
 
-pub fn optional_name<'a, E>(input: &'a str) -> IResult<&'a str, Option<String>, E>
+pub fn maybe_name<'a, E>(input: &'a str) -> IResult<&'a str, Option<String>, E>
 where
-    E: 'a + ParseError<&'a str>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     opt(map(
         separated_value(ws(tag("name")), ws(tag(":")), ws(string)),
@@ -277,9 +284,9 @@ where
     ))(input)
 }
 
-pub fn optional_lod<'a, E>(input: &'a str) -> IResult<&'a str, Option<u32>, E>
+pub fn maybe_lod<'a, E>(input: &'a str) -> IResult<&'a str, Option<u32>, E>
 where
-    E: 'a + ParseError<&'a str>,
+    E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError>,
 {
     opt(separated_value(
         ws(tag("lod")),
@@ -290,15 +297,15 @@ where
 
 pub fn pass<'a, E>(input: &'a str) -> IResult<&'a str, Pass, E>
 where
-    E: 'a + ParseError<&'a str>,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    let parse_pass = named("pass", block(tuple((optional_name, shader_sources))));
+    let parse_pass = named("pass", block(tuple((maybe_name, shader_sources))));
     map(parse_pass, |(name, shaders)| Pass { name, shaders })(input)
 }
 
 pub fn render_queue<'a, E>(input: &'a str) -> IResult<&'a str, RenderQueue, E>
 where
-    E: 'a + ParseError<&'a str>,
+    E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError>,
 {
     let parse_val = alt((
         value(RenderQueue::Opaque, ws(tag("Opaque"))),
@@ -325,25 +332,13 @@ where
 
 pub fn sub_shader<'a, E>(input: &'a str) -> IResult<&'a str, SubShader, E>
 where
-    E: 'a + ParseError<&'a str>,
+    E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError> + ContextError<&'a str>,
 {
-    let optional_lod = opt(separated_value(
-        ws(tag("lod")),
-        ws(tag(":")),
-        map_res(ws(parse_esc_str), |a| a.parse::<u32>()),
-    ));
-
-    let optional_include = opt(named_string_block("include"));
+    let maybe_include = opt(named_string_block("include"));
     let passes = many1(pass);
 
     let contents = map(
-        tuple((
-            optional_name,
-            optional_lod,
-            render_queue,
-            optional_include,
-            passes,
-        )),
+        tuple((maybe_name, maybe_lod, render_queue, maybe_include, passes)),
         |(name, lod, render_queue, include, passes)| SubShader {
             name,
             lod,
@@ -542,7 +537,7 @@ mod tests {
         let input = r#"name:"My Foo""#;
         let expected = Some("My Foo".to_string());
 
-        let (_, res) = optional_name::<VerboseError<&str>>(input).unwrap();
+        let (_, res) = maybe_name::<VerboseError<&str>>(input).unwrap();
         assert_eq!(expected, res)
     }
 
