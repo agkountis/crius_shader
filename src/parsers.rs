@@ -1,9 +1,10 @@
 use crate::*;
 
+use nom::multi::many0;
 use nom::{
     branch::{alt, permutation},
     bytes::complete::{escaped, is_not, tag, take_until},
-    character::complete::{alphanumeric1, char, digit1, multispace0, one_of},
+    character::complete::{alphanumeric1, digit1, multispace0, one_of},
     combinator::{cut, map, map_res, opt, value, verify},
     error::{context, ContextError, FromExternalError, ParseError, VerboseError},
     multi::{many1, separated_list0},
@@ -21,8 +22,28 @@ where
     delimited(multispace0, inner, multispace0)
 }
 
+fn trim_line_leading_ws<'a, F, E>(parser: F) -> impl FnMut(&'a str) -> IResult<&'a str, String, E>
+where
+    F: 'a + FnMut(&'a str) -> IResult<&'a str, &'a str, E>,
+    E: 'a + ParseError<&'a str>,
+{
+    map(parser, |str: &str| {
+        let mut string = str
+            .lines()
+            .filter(|&line| !line.trim_start().is_empty())
+            .fold(String::new(), |acc, line| acc + line.trim_start() + "\n");
+        string.truncate(string.len() - 1);
+        string.shrink_to_fit();
+        string
+    })
+}
+
 fn parse_esc_str<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
-    escaped(alphanumeric1, '\\', one_of("\"n\\"))(input)
+    escaped(
+        alphanumeric1,
+        ESCAPE_CONTROL_CHARACTER,
+        one_of(ESCAPABLE_CHARACTERS),
+    )(input)
 }
 
 pub fn string<'a, E>(i: &'a str) -> IResult<&'a str, &'a str, E>
@@ -31,7 +52,13 @@ where
 {
     context(
         "string",
-        preceded(char('\"'), cut(terminated(take_until(r#"""#), char('\"')))),
+        preceded(
+            tag(STRING_QUOTE_TAG),
+            cut(terminated(
+                take_until(STRING_QUOTE_TAG),
+                tag(STRING_QUOTE_TAG),
+            )),
+        ),
     )(i)
 }
 
@@ -39,8 +66,8 @@ fn boolean<'a, E>(input: &'a str) -> IResult<&'a str, bool, E>
 where
     E: 'a + ParseError<&'a str>,
 {
-    let parse_true = value(true, tag("true"));
-    let parse_false = value(false, tag("false"));
+    let parse_true = value(true, tag(TRUE_TAG));
+    let parse_false = value(false, tag(FALSE_TAG));
     alt((parse_true, parse_false))(input)
 }
 
@@ -49,12 +76,13 @@ where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     let vec2 = preceded(
-        ws(tag("(")),
+        ws(tag(BLOCK_OPEN_TAG)),
         cut(terminated(
-            verify(separated_list0(ws(tag(",")), float), |list: &[f32]| {
-                list.len() == 2
-            }),
-            ws(tag(")")),
+            verify(
+                separated_list0(ws(tag(LIST_SEPARATOR_TAG)), float),
+                |list: &[f32]| list.len() == 2,
+            ),
+            ws(tag(BLOCK_CLOSE_TAG)),
         )),
     );
 
@@ -66,12 +94,13 @@ where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     let vec3 = preceded(
-        ws(tag("(")),
+        ws(tag(BLOCK_OPEN_TAG)),
         cut(terminated(
-            verify(separated_list0(ws(tag(",")), float), |list: &[f32]| {
-                list.len() == 3
-            }),
-            ws(tag(")")),
+            verify(
+                separated_list0(ws(tag(LIST_SEPARATOR_TAG)), float),
+                |list: &[f32]| list.len() == 3,
+            ),
+            ws(tag(BLOCK_CLOSE_TAG)),
         )),
     );
 
@@ -83,12 +112,13 @@ where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     let vec4 = preceded(
-        ws(tag("(")),
+        ws(tag(BLOCK_OPEN_TAG)),
         cut(terminated(
-            verify(separated_list0(ws(tag(",")), float), |list: &[f32]| {
-                list.len() == 4
-            }),
-            ws(tag(")")),
+            verify(
+                separated_list0(ws(tag(LIST_SEPARATOR_TAG)), float),
+                |list: &[f32]| list.len() == 4,
+            ),
+            ws(tag(BLOCK_CLOSE_TAG)),
         )),
     );
 
@@ -101,14 +131,18 @@ where
 {
     value(
         (), // Output is thrown away.
-        pair(tag("//"), is_not("\n\r")),
+        pair(tag(SINGLE_LINE_COMMENT_TAG), is_not(NEWLINE_TAG)),
     )(i)
 }
 
 fn multi_line_comment<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, (), E> {
     value(
         (), // Output is thrown away.
-        tuple((tag("/*"), take_until("*/"), tag("*/"))),
+        tuple((
+            tag(MULTI_LINE_COMMENT_OPEN_TAG),
+            take_until(MULTI_LINE_COMMENT_CLOSE_TAG),
+            tag(MULTI_LINE_COMMENT_CLOSE_TAG),
+        )),
     )(i)
 }
 
@@ -119,6 +153,15 @@ where
     let a = ws(single_line_comment);
     let b = ws(multi_line_comment);
     alt((a, b))(input)
+}
+
+fn leading_comments<'a, F, O, E>(parser: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
+where
+    F: 'a + FnMut(&'a str) -> IResult<&'a str, O, E>,
+    E: 'a + ParseError<&'a str>,
+{
+    let maybe_comment = opt(map(many0(ws(comment)), |_| ()));
+    preceded(maybe_comment, parser)
 }
 
 fn parse_block<'a, F, O, E>(
@@ -144,7 +187,10 @@ where
     F: 'a + FnMut(&'a str) -> IResult<&'a str, O, E>,
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    context("block", parse_block("(", parser, ")"))
+    context(
+        "block",
+        parse_block(BLOCK_OPEN_TAG, parser, BLOCK_CLOSE_TAG),
+    )
 }
 
 fn string_block<'a, F, O, E>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
@@ -152,7 +198,10 @@ where
     F: 'a + FnMut(&'a str) -> IResult<&'a str, O, E>,
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    context("string_block", parse_block(r#"(""#, inner, r#"")"#))
+    context(
+        "string_block",
+        parse_block(STRING_BLOCK_OPEN_TAG, inner, STRING_BLOCK_CLOSE_TAG),
+    )
 }
 
 fn named<'a, F, O, E>(name: &'a str, parser: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
@@ -167,29 +216,24 @@ fn string_block_contents<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: 'a + ParseError<&'a str>,
 {
-    take_until(r#"")"#)(input)
-}
-
-fn trim_ws<'a, F, E>(parser: F) -> impl FnMut(&'a str) -> IResult<&'a str, String, E>
-where
-    F: 'a + FnMut(&'a str) -> IResult<&'a str, &'a str, E>,
-    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
-{
-    context(
-        "trimmed_string",
-        map(parser, |s| {
-            s.lines()
-                .into_iter()
-                .fold(String::new(), |acc, s| acc + s.trim())
-        }),
-    )
+    take_until(STRING_BLOCK_CLOSE_TAG)(input)
 }
 
 fn named_string_block<'a, E>(name: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, String, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    named(name, string_block(trim_ws(string_block_contents)))
+    named(
+        name,
+        string_block(trim_line_leading_ws(string_block_contents)),
+    )
+}
+
+fn shader_source<'a, E>(shader_tag: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, String, E>
+where
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
+{
+    leading_comments(named_string_block(shader_tag))
 }
 
 fn optional_shader_source<'a, E>(
@@ -198,13 +242,13 @@ fn optional_shader_source<'a, E>(
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    let tesselation_ctrl = named_string_block(TESSELATION_CONTROL_SHADER_TAG);
-    let tesselation_eval = named_string_block(TESSELATION_EVALUATION_SHADER_TAG);
-    let geometry = named_string_block(GEOMETRY_SHADER_TAG);
-    let tesselation_block = named(
+    let tesselation_ctrl = shader_source(TESSELATION_CONTROL_SHADER_TAG);
+    let tesselation_eval = shader_source(TESSELATION_EVALUATION_SHADER_TAG);
+    let geometry = shader_source(GEOMETRY_SHADER_TAG);
+    let tesselation_block = leading_comments(named(
         TESSELATION_BLOCK_TAG,
         block(permutation((tesselation_ctrl, tesselation_eval))),
-    );
+    ));
 
     let tesselation = map(tesselation_block, |(control, evaluation)| {
         OptionalShaderSource::Tesselation {
@@ -223,10 +267,10 @@ fn shader_sources<'a, E>(input: &'a str) -> IResult<&'a str, ShadersSources, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    map(
+    let mut parser = map(
         permutation((
-            named_string_block(VERTEX_SHADER_TAG),
-            named_string_block(FRAGMENT_SHADER_TAG),
+            shader_source(VERTEX_SHADER_TAG),
+            shader_source(FRAGMENT_SHADER_TAG),
             optional_shader_source,
             optional_shader_source,
             optional_shader_source,
@@ -257,7 +301,9 @@ where
 
             shaders
         },
-    )(input)
+    );
+
+    parser(input)
 }
 
 pub fn separated_value<'a, I, O1, O2, O3, E, F, G, H>(
@@ -278,28 +324,28 @@ pub fn maybe_name<'a, E>(input: &'a str) -> IResult<&'a str, Option<String>, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    opt(map(
-        separated_value(ws(tag("name")), ws(tag(":")), ws(string)),
+    leading_comments(opt(map(
+        separated_value(ws(tag(NAME_TAG)), ws(tag(VALUE_SEPARATOR_TAG)), ws(string)),
         String::from,
-    ))(input)
+    )))(input)
 }
 
 pub fn maybe_lod<'a, E>(input: &'a str) -> IResult<&'a str, Option<u32>, E>
 where
     E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError>,
 {
-    opt(separated_value(
-        ws(tag("lod")),
-        ws(tag(":")),
+    leading_comments(opt(separated_value(
+        ws(tag(LOD_TAG)),
+        ws(tag(VALUE_SEPARATOR_TAG)),
         map_res(ws(parse_esc_str), |a| a.parse::<u32>()),
-    ))(input)
+    )))(input)
 }
 
 pub fn pass<'a, E>(input: &'a str) -> IResult<&'a str, Pass, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    let parse_pass = named("pass", block(tuple((maybe_name, shader_sources))));
+    let parse_pass = leading_comments(named(PASS_TAG, block(tuple((maybe_name, shader_sources)))));
     map(parse_pass, |(name, shaders)| Pass { name, shaders })(input)
 }
 
@@ -308,34 +354,34 @@ where
     E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError>,
 {
     let parse_val = alt((
-        value(RenderQueue::Opaque, ws(tag("Opaque"))),
+        value(RenderQueue::Opaque, ws(tag(RENDER_QUEUE_OPAQUE_TAG))),
         map(
             preceded(
-                tag("Transparent"),
+                tag(RENDER_QUEUE_TRANSPARENT_TAG),
                 delimited(
-                    ws(tag("(")),
+                    ws(tag(BLOCK_OPEN_TAG)),
                     map_res(digit1, str::parse::<u32>),
-                    ws(tag(")")),
+                    ws(tag(BLOCK_CLOSE_TAG)),
                 ),
             ),
             |num| RenderQueue::Transparent(num),
         ),
     ));
-    preceded(
-        ws(tag("render_queue")),
-        preceded(
-            ws(tag(":")),
-            ws(delimited(ws(tag("\"")), parse_val, ws(tag("\"")))),
-        ),
-    )(input)
+
+    let parser = preceded(
+        ws(tag(RENDER_QUEUE_TAG)),
+        preceded(ws(tag(VALUE_SEPARATOR_TAG)), parse_val),
+    );
+
+    leading_comments(parser)(input)
 }
 
 pub fn sub_shader<'a, E>(input: &'a str) -> IResult<&'a str, SubShader, E>
 where
     E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError> + ContextError<&'a str>,
 {
-    let maybe_include = opt(named_string_block("include"));
-    let passes = many1(pass);
+    let maybe_include = leading_comments(opt(named_string_block("include")));
+    let passes = leading_comments(named(PASSES_TAG, block(many1(pass))));
 
     let contents = map(
         tuple((maybe_name, maybe_lod, render_queue, maybe_include, passes)),
@@ -343,12 +389,12 @@ where
             name,
             lod,
             render_queue,
-            include,
+            include: include.map(String::from),
             passes,
         },
     );
 
-    named("sub_shader", block(contents))(input)
+    named(SUB_SHADER_TAG, block(contents))(input)
 }
 
 mod tests {
@@ -364,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_multi_line_comment_parser() {
-        let input = "/* hello world\nMulti line*/\nFoo";
+        let input = "/* hello world\n*Multi line*/\nFoo";
         let (i, _) = multi_line_comment::<VerboseError<&str>>(input).unwrap();
         assert_eq!(i, "\nFoo")
     }
@@ -410,21 +456,25 @@ mod tests {
         let input = r#"
             vertex ("
                 layout(location = 0) in vec3 attrPos;
-        
+
                 struct Foo {
                     vec3 bla;
                 };
-        
+
                 void main()
                 {
                     #define FOO #include "bla" int bla = (1 + 1) / 2 * 10;
                 }
-            ")
-        "#;
+            ")"#;
 
-        let exp1 = "layout(location = 0) in vec3 attrPos;\
-        struct Foo {vec3 bla;};void main(){#define FOO #include \"bla\" \
-        int bla = (1 + 1) / 2 * 10;}";
+        let exp = "layout(location = 0) in vec3 attrPos;
+                struct Foo {
+                    vec3 bla;
+                };
+                void main()
+                {
+                    #define FOO #include \"bla\" int bla = (1 + 1) / 2 * 10;
+                }";
 
         fn f<'a>(tag: &'a str, input: &'a str) -> IResult<&'a str, String, VerboseError<&'a str>> {
             named_string_block::<VerboseError<&str>>(tag)(input)
@@ -432,12 +482,13 @@ mod tests {
 
         match f(VERTEX_SHADER_TAG, input) {
             Err(nom::Err::Failure(e)) | Err(nom::Err::Error(e)) => {
-                println!("{}", convert_error(input, e))
+                println!("{}", convert_error(input, e));
+                panic!("Parse error!")
             }
             Ok((i, res)) => {
                 println!("Result: {}", res);
                 println!("Remaining: {}", i);
-                assert_eq!(exp1, res)
+                assert_eq!(transform_multi_line_str(exp), res)
             }
             _ => {}
         }
@@ -446,7 +497,18 @@ mod tests {
     #[test]
     fn test_shaders() {
         let input = r#"
+            // Test comment
+            /**
+            * Test comment
+            */
+            
+            // Test comment
             vertex ("
+                //Test comment
+                /*Test comment
+                * hello
+                */
+                /* Test comment */
                 #define FOO #include "bla" int bla = (1 + 1) / 2 * 10;
             ")
             
@@ -454,10 +516,15 @@ mod tests {
                 bla
             ")"#;
 
-        //#define FOO #include "bla" int bla = (1 + 1) / 2 * 10;
+        let exp_vert = r#"//Test comment
+                /*Test comment
+                * hello
+                */
+                /* Test comment */
+                #define FOO #include "bla" int bla = (1 + 1) / 2 * 10;"#;
 
         let expected = ShadersSources {
-            vertex: r#"#define FOO #include "bla" int bla = (1 + 1) / 2 * 10;"#.to_string(),
+            vertex: transform_multi_line_str(exp_vert),
             fragment: "bla".to_string(),
             geometry: None,
             tesselation: None,
@@ -471,7 +538,7 @@ mod tests {
     fn test_pass() {
         let input = r#"pass (
                 name: "MyPass"
-               
+             
                 fragment ("
                     #define FOO #include "bla" int bla = (1 + 1) / 2 * 10;
                 ")
@@ -498,26 +565,26 @@ mod tests {
         let expected = Pass {
             name: Some("MyPass".to_string()),
             shaders: ShadersSources {
-                vertex: "foo".to_string(),
-                fragment: r#"#define FOO #include "bla" int bla = (1 + 1) / 2 * 10;"#.to_string(),
-                geometry: Some("geom".to_string()),
+                vertex: String::from("foo"),
+                fragment: String::from(r#"#define FOO #include "bla" int bla = (1 + 1) / 2 * 10;"#),
+                geometry: Some(String::from("geom")),
                 tesselation: Some(Tesselation {
-                    control: "ctrl".to_string(),
-                    evaluation: "eval".to_string(),
+                    control: String::from("ctrl"),
+                    evaluation: String::from("eval"),
                 }),
             },
         };
 
         let (_, res) = pass::<VerboseError<&str>>(input).unwrap();
-        assert_eq!(res, expected)
+        assert_eq!(expected, res)
     }
 
     #[test]
     fn test_render_queue() {
         let inputs = vec![
-            r#"render_queue: "Opaque""#,
-            r#"render_queue: "Transparent(0)""#,
-            r#"render_queue: "Transparent(10)""#,
+            "render_queue: Opaque",
+            "render_queue: Transparent(0)",
+            "render_queue: Transparent(10)",
         ];
 
         let expected = vec![
@@ -549,38 +616,37 @@ mod tests {
                 
                 lod: 600
                 
-                render_queue: "Transparent(1)"
+                render_queue: Transparent(1)
                 
                 include ("
                     #define MY_DEFINE
                 ")
                 
-                pass (
-                    name: "Pass1"
+                // bla
+                /*
+                 * foo
+                 * bla
+                 */
+                passes ( // Foo
+                    pass ( /*
+                    * foo
+                    */
+                        name: "Pass1" //foo
                  
-                    vertex ("
-                        v1
-                    ")
-                    
-                    fragment ("
-                        f1
-                    ")
-                )
+                        /*Bla*/vertex ("v1")
+                        
+                        fragment ("f1")
+                    )
                 
-                pass (
-                    name: "Pass2"
-                    
-                    vertex ("
-                        v2
-                    ")
-                    
-                    fragment ("
-                        f2
-                    ")
-                    
-                    geometry ("
-                        g2
-                    ")
+                    pass (
+                        name: "Pass2"
+                        
+                        vertex ("v2")
+                        
+                        fragment ("f2")
+                        
+                        geometry ("g2")
+                    )
                 )
             )
         "#;
@@ -614,5 +680,16 @@ mod tests {
 
         let (_, res) = sub_shader::<VerboseError<&str>>(input).unwrap();
         assert_eq!(expected, res)
+    }
+
+    fn transform_multi_line_str<T: AsRef<str>>(input: T) -> String {
+        let mut output = input
+            .as_ref()
+            .lines()
+            .filter(|line| !line.trim_start().is_empty())
+            .fold(String::new(), |acc, line| acc + line.trim_start() + "\n");
+        output.truncate(output.len() - 1);
+        output.shrink_to_fit();
+        output
     }
 }

@@ -51,13 +51,36 @@ pub enum FormatValue {
     Vector4([f32; 4]),
 }
 
-pub(crate) const SHADING_LANGUAGE_TAG: &str = "shading_language";
 pub(crate) const NAME_TAG: &str = "name";
 pub(crate) const SHADER_TAG: &str = "shader";
+pub(crate) const SUB_SHADER_TAG: &str = "sub_shader";
 pub(crate) const LOD_TAG: &str = "lod";
 pub(crate) const SHADER_FEATURES_TAG: &str = "shader_features";
 pub(crate) const RENDER_QUEUE_TAG: &str = "render_queue";
+pub(crate) const RENDER_QUEUE_OPAQUE_TAG: &str = "Opaque";
+pub(crate) const RENDER_QUEUE_TRANSPARENT_TAG: &str = "Transparent";
 pub(crate) const PASS_TAG: &str = "pass";
+pub(crate) const PASSES_TAG: &str = "passes";
+
+pub(crate) const VALUE_SEPARATOR_TAG: &str = ":";
+pub(crate) const LIST_SEPARATOR_TAG: &str = ",";
+pub(crate) const BLOCK_OPEN_TAG: &str = "(";
+pub(crate) const BLOCK_CLOSE_TAG: &str = ")";
+pub(crate) const STRING_BLOCK_OPEN_TAG: &str = r#"(""#;
+pub(crate) const STRING_BLOCK_CLOSE_TAG: &str = r#"")"#;
+pub(crate) const STRING_QUOTE_TAG: &str = r#"""#;
+
+pub(crate) const ESCAPABLE_CHARACTERS: &str = r#""n\"#;
+pub(crate) const ESCAPE_CONTROL_CHARACTER: char = '\\';
+
+pub(crate) const TRUE_TAG: &str = "true";
+pub(crate) const FALSE_TAG: &str = "false";
+
+pub(crate) const SINGLE_LINE_COMMENT_TAG: &str = "//";
+pub(crate) const MULTI_LINE_COMMENT_OPEN_TAG: &str = "/*";
+pub(crate) const MULTI_LINE_COMMENT_CLOSE_TAG: &str = "*/";
+
+pub(crate) const NEWLINE_TAG: &str = "\n\r";
 
 pub(crate) const VERTEX_SHADER_TAG: &str = "vertex";
 pub(crate) const FRAGMENT_SHADER_TAG: &str = "fragment";
