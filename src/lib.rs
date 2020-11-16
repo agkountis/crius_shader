@@ -12,6 +12,18 @@ pub enum OptionalShaderSource {
     Tesselation { control: String, evaluation: String },
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub enum SubShaderMisc {
+    Name(String),
+    Include(String),
+    Lod(u32),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum ShaderMisc {
+    Include(String),
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub struct Tesselation {
     control: String,
@@ -39,6 +51,13 @@ pub struct SubShader {
     render_queue: RenderQueue,
     include: Option<String>,
     passes: Vec<Pass>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Shader {
+    name: String,
+    include: Option<String>,
+    sub_shaders: Vec<SubShader>,
 }
 
 #[derive(Debug, PartialEq)]

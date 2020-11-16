@@ -283,7 +283,7 @@ where
                 ..Default::default()
             };
 
-            for opt_shader in vec![opt1, opt2, opt3].into_iter() {
+            for opt_shader in vec![opt1, opt2, opt3] {
                 if let Some(source) = opt_shader {
                     match source {
                         OptionalShaderSource::Geometry(s) => shaders.geometry = Some(s),
@@ -321,35 +321,42 @@ where
     preceded(before, preceded(separator, value_parser))
 }
 
-pub fn maybe_name<'a, E>(input: &'a str) -> IResult<&'a str, Option<String>, E>
+fn name<'a, E>(input: &'a str) -> IResult<&'a str, String, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    leading_comments(opt(map(
+    leading_comments(map(
         separated_value(ws(tag(NAME_TAG)), ws(tag(VALUE_SEPARATOR_TAG)), ws(string)),
         String::from,
-    )))(input)
+    ))(input)
 }
 
-pub fn maybe_lod<'a, E>(input: &'a str) -> IResult<&'a str, Option<u32>, E>
+fn maybe_name<'a, E>(input: &'a str) -> IResult<&'a str, Option<String>, E>
+where
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
+{
+    opt(name)(input)
+}
+
+fn lod<'a, E>(input: &'a str) -> IResult<&'a str, u32, E>
 where
     E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError>,
 {
-    leading_comments(opt(separated_value(
+    leading_comments(separated_value(
         ws(tag(LOD_TAG)),
         ws(tag(VALUE_SEPARATOR_TAG)),
         map_res(ws(parse_esc_str), |a| a.parse::<u32>()),
-    )))(input)
+    ))(input)
 }
 
-pub fn maybe_include<'a, E>(input: &'a str) -> IResult<&'a str, Option<String>, E>
+fn include<'a, E>(input: &'a str) -> IResult<&'a str, String, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    leading_comments(opt(named_string_block(INCLUDE_TAG)))(input)
+    leading_comments(named_string_block(INCLUDE_TAG))(input)
 }
 
-pub fn pass<'a, E>(input: &'a str) -> IResult<&'a str, Pass, E>
+fn pass<'a, E>(input: &'a str) -> IResult<&'a str, Pass, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
@@ -357,14 +364,14 @@ where
     map(parse_pass, |(name, shaders)| Pass { name, shaders })(input)
 }
 
-pub fn passes<'a, E>(input: &'a str) -> IResult<&'a str, Vec<Pass>, E>
+fn passes<'a, E>(input: &'a str) -> IResult<&'a str, Vec<Pass>, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     leading_comments(many1(pass))(input)
 }
 
-pub fn render_queue<'a, E>(input: &'a str) -> IResult<&'a str, RenderQueue, E>
+fn render_queue<'a, E>(input: &'a str) -> IResult<&'a str, RenderQueue, E>
 where
     E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError>,
 {
@@ -391,18 +398,54 @@ where
     leading_comments(parser)(input)
 }
 
-pub fn sub_shader<'a, E>(input: &'a str) -> IResult<&'a str, SubShader, E>
+fn sub_shader_misc_value<'a, E>(input: &'a str) -> IResult<&'a str, Option<SubShaderMisc>, E>
 where
     E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError> + ContextError<&'a str>,
 {
-    let top_section = permutation((maybe_name, maybe_lod, render_queue, maybe_include));
+    opt(alt((
+        map(name, SubShaderMisc::Name),
+        map(lod, SubShaderMisc::Lod),
+        map(include, SubShaderMisc::Include),
+    )))(input)
+}
+
+fn sub_shader<'a, E>(input: &'a str) -> IResult<&'a str, SubShader, E>
+where
+    E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError> + ContextError<&'a str>,
+{
+    let top_section = map(
+        permutation((
+            render_queue,
+            sub_shader_misc_value,
+            sub_shader_misc_value,
+            sub_shader_misc_value,
+        )),
+        |(render_queue, opt1, opt2, opt3)| {
+            let mut maybe_name = None;
+            let mut maybe_lod = None;
+            let mut maybe_include = None;
+
+            for opt in vec![opt1, opt2, opt3] {
+                if let Some(value) = opt {
+                    match value {
+                        SubShaderMisc::Name(name) => maybe_name = Some(name),
+                        SubShaderMisc::Include(include) => maybe_include = Some(include),
+                        SubShaderMisc::Lod(lod) => maybe_lod = Some(lod),
+                    }
+                }
+            }
+
+            (render_queue, maybe_name, maybe_include, maybe_lod)
+        },
+    );
+
     let contents = map(
         pair(top_section, passes),
-        |((name, lod, render_queue, include), passes)| SubShader {
+        |((render_queue, name, include, lod), passes)| SubShader {
             name,
             lod,
             render_queue,
-            include: include.map(String::from),
+            include,
             passes,
         },
     );
@@ -410,13 +453,31 @@ where
     named(SUB_SHADER_TAG, block(contents))(input)
 }
 
-// pub fn shader<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
-// where
-//     E: 'a + ParseError<&'a str> + ContextError<&'a str>
-// {
-//     let a = permutation((maybe_name, ))
-//     all_consuming()
-// }
+fn sub_shaders<'a, E>(input: &'a str) -> IResult<&'a str, Vec<SubShader>, E>
+where
+    E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError> + ContextError<&'a str>,
+{
+    leading_comments(many1(sub_shader))(input)
+}
+
+pub fn shader<'a, E>(input: &'a str) -> IResult<&'a str, Shader, E>
+where
+    E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError> + ContextError<&'a str>,
+{
+    let top_section = permutation((name, opt(include)));
+    let contents = map(
+        pair(top_section, sub_shaders),
+        |((name, include), sub_shaders)| Shader {
+            name,
+            include,
+            sub_shaders,
+        },
+    );
+
+    let parser = named(SHADER_TAG, block(contents));
+
+    all_consuming(parser)(input)
+}
 
 mod tests {
     use super::*;
@@ -632,42 +693,40 @@ mod tests {
     #[test]
     fn test_sub_shader() {
         let input = r#"
-            sub_shader (
-                name: "Sub Shader 1"
+        sub_shader (
+             render_queue: Transparent(1)
+             lod: 600
+             name: "Sub Shader 1"
                 
-                lod: 600
-                
-                render_queue: Transparent(1)
-                
-                include ("
-                    #define MY_DEFINE
-                ")
-                
-                // bla
-                /*
-                 * foo
-                 * bla
-                 */
-         
-                pass ( /*
-                    * foo
-                    */
-                        name: "Pass1" //foo
-                 
-                        /*Bla*/vertex ("v1")
-                        
-                        fragment ("f1")
-                    )
-                
-                    pass (
-                        name: "Pass2"
-                        
-                        vertex ("v2")
-                        
-                        fragment ("f2")
-                        
-                        geometry ("g2")
-                    )
+            include ("
+                #define MY_DEFINE
+            ")
+            
+            // bla
+            /*
+             * foo
+             * bla
+             */
+     
+            pass ( /*
+                * foo
+                */
+                    name: "Pass1" //foo
+             
+                    /*Bla*/vertex ("v1")
+                    
+                    fragment ("f1")
+                )
+            
+                pass (
+                    name: "Pass2"
+                    
+                    geometry ("g2")
+                    
+                    vertex ("v2")
+                    
+                    fragment ("f2")
+                )
             )
         "#;
 
