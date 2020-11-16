@@ -25,61 +25,59 @@ shader (
             // Include block to be included to each pass of this sub-shader.
         ")
 
-        passes (
-            pass (
-                name: "My Pass"
-                vertex ("
-                    // Vertex shader code goes here.
+        pass (
+            name: "My Pass"
+            vertex ("
+                // Vertex shader code goes here.
+            ")
+
+            fragment ("
+                // Fragment shader code goes here.
+            ")
+
+            // Optional
+            geometry ("
+                // Geometry shader goes here.
+            ")
+
+            // Optional
+            tesselation (
+                control ("
+                    // Tesselation control shader code goes here.
                 ")
 
-                fragment ("
-                    // Fragment shader code goes here.
+                evaluation ("
+                    // Tesselation evaluation shader code goes here.
                 ")
-
-                // Optional
-                geometry ("
-                    // Geometry shader goes here.
-                ")
-
-                // Optional
-                tesselation (
-                    control ("
-                        // Tesselation control shader code goes here.
-                    ")
-
-                    evaluation ("
-                        // Tesselation evaluation shader code goes here.
-                    ")
-                )
             )
+        )
 
-            // Represents a render pass. At least 1 must be defined.
-            pass (
-                name: "My Pass"
+        // Represents a render pass. At least 1 must be defined.
+        pass (
+            name: "My Pass"
 
-                vertex ("
-                    // Vertex shader code goes here.
+            vertex ("
+                // Vertex shader code goes here.
+            ")
+
+            fragment ("
+                // Fragment shader code goes here.
+            ")
+
+            // Optional
+            geometry ("
+                // Geometry shader goes here.
+            ")
+
+            // Optional
+            tesselation (
+                control ("
+                    // Tesselation control shader code goes here.
                 ")
 
-                fragment ("
-                    // Fragment shader code goes here.
+                evaluation ("
+                    // Tesselation evaluation shader code goes here.
                 ")
-
-                // Optional
-                geometry ("
-                    // Geometry shader goes here.
-                ")
-
-                // Optional
-                tesselation (
-                    control ("
-                        // Tesselation control shader code goes here.
-                    ")
-
-                    evaluation ("
-                        // Tesselation evaluation shader code goes here.
-                    ")
-                )
             )
         )
     )

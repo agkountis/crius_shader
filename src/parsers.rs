@@ -1,5 +1,6 @@
 use crate::*;
 
+use nom::combinator::all_consuming;
 use nom::multi::many0;
 use nom::{
     branch::{alt, permutation},
@@ -341,12 +342,26 @@ where
     )))(input)
 }
 
+pub fn maybe_include<'a, E>(input: &'a str) -> IResult<&'a str, Option<String>, E>
+where
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
+{
+    leading_comments(opt(named_string_block(INCLUDE_TAG)))(input)
+}
+
 pub fn pass<'a, E>(input: &'a str) -> IResult<&'a str, Pass, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
     let parse_pass = leading_comments(named(PASS_TAG, block(tuple((maybe_name, shader_sources)))));
     map(parse_pass, |(name, shaders)| Pass { name, shaders })(input)
+}
+
+pub fn passes<'a, E>(input: &'a str) -> IResult<&'a str, Vec<Pass>, E>
+where
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
+{
+    leading_comments(many1(pass))(input)
 }
 
 pub fn render_queue<'a, E>(input: &'a str) -> IResult<&'a str, RenderQueue, E>
@@ -380,12 +395,10 @@ pub fn sub_shader<'a, E>(input: &'a str) -> IResult<&'a str, SubShader, E>
 where
     E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError> + ContextError<&'a str>,
 {
-    let maybe_include = leading_comments(opt(named_string_block("include")));
-    let passes = leading_comments(named(PASSES_TAG, block(many1(pass))));
-
+    let top_section = permutation((maybe_name, maybe_lod, render_queue, maybe_include));
     let contents = map(
-        tuple((maybe_name, maybe_lod, render_queue, maybe_include, passes)),
-        |(name, lod, render_queue, include, passes)| SubShader {
+        pair(top_section, passes),
+        |((name, lod, render_queue, include), passes)| SubShader {
             name,
             lod,
             render_queue,
@@ -396,6 +409,14 @@ where
 
     named(SUB_SHADER_TAG, block(contents))(input)
 }
+
+// pub fn shader<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+// where
+//     E: 'a + ParseError<&'a str> + ContextError<&'a str>
+// {
+//     let a = permutation((maybe_name, ))
+//     all_consuming()
+// }
 
 mod tests {
     use super::*;
@@ -627,8 +648,8 @@ mod tests {
                  * foo
                  * bla
                  */
-                passes ( // Foo
-                    pass ( /*
+         
+                pass ( /*
                     * foo
                     */
                         name: "Pass1" //foo
@@ -647,7 +668,6 @@ mod tests {
                         
                         geometry ("g2")
                     )
-                )
             )
         "#;
 

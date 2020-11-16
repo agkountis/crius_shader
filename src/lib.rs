@@ -61,6 +61,7 @@ pub(crate) const RENDER_QUEUE_OPAQUE_TAG: &str = "Opaque";
 pub(crate) const RENDER_QUEUE_TRANSPARENT_TAG: &str = "Transparent";
 pub(crate) const PASS_TAG: &str = "pass";
 pub(crate) const PASSES_TAG: &str = "passes";
+pub(crate) const INCLUDE_TAG: &str = "include";
 
 pub(crate) const VALUE_SEPARATOR_TAG: &str = ":";
 pub(crate) const LIST_SEPARATOR_TAG: &str = ",";
