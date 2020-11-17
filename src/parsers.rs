@@ -1,14 +1,12 @@
 use crate::*;
 
-use nom::combinator::all_consuming;
-use nom::multi::many0;
 use nom::{
     branch::{alt, permutation},
     bytes::complete::{escaped, is_not, tag, take_until},
     character::complete::{alphanumeric1, digit1, multispace0, one_of},
-    combinator::{cut, map, map_res, opt, value, verify},
+    combinator::{all_consuming, cut, map, map_res, opt, value, verify},
     error::{context, ContextError, FromExternalError, ParseError, VerboseError},
-    multi::{many1, separated_list0},
+    multi::{many0, many1, separated_list0},
     number::complete::float,
     sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
@@ -759,6 +757,60 @@ mod tests {
 
         let (_, res) = sub_shader::<VerboseError<&str>>(input).unwrap();
         assert_eq!(expected, res)
+    }
+
+    #[test]
+    fn test_shader() {
+        let input = r#"
+        shader (
+            name: "Test Shader"
+            
+            include ("
+                #include "this.glsl"
+            ")
+            
+            sub_shader(
+                name: "SubShader!1"
+                lod: 700
+                
+                render_queue: Opaque
+                
+                pass (
+                    vertex ("
+                        foo
+                    ")
+                    
+                    fragment("
+                        bla
+                    ")
+                )
+            )
+        )
+        "#;
+
+        let exp = Shader {
+            name: "Test Shader".to_string(),
+            include: Some(r#"#include "this.glsl""#.to_string()),
+            sub_shaders: vec![SubShader {
+                name: Some("SubShader!1".to_string()),
+                lod: Some(700),
+                render_queue: RenderQueue::Opaque,
+                include: None,
+                passes: vec![Pass {
+                    name: None,
+                    shaders: ShadersSources {
+                        vertex: transform_multi_line_str("foo"),
+                        fragment: transform_multi_line_str("bla"),
+                        geometry: None,
+                        tesselation: None,
+                    },
+                }],
+            }],
+        };
+
+        let (i, res) = shader::<VerboseError<&str>>(input).unwrap();
+        assert_eq!(exp, res);
+        assert_eq!(i, "");
     }
 
     fn transform_multi_line_str<T: AsRef<str>>(input: T) -> String {
