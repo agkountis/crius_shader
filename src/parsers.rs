@@ -21,7 +21,7 @@ where
     delimited(multispace0, inner, multispace0)
 }
 
-fn trim_line_leading_ws<'a, F, E>(parser: F) -> impl FnMut(&'a str) -> IResult<&'a str, String, E>
+fn trim_leading_line_ws<'a, F, E>(parser: F) -> impl FnMut(&'a str) -> IResult<&'a str, String, E>
 where
     F: 'a + FnMut(&'a str) -> IResult<&'a str, &'a str, E>,
     E: 'a + ParseError<&'a str>,
@@ -224,72 +224,133 @@ where
 {
     named(
         name,
-        string_block(trim_line_leading_ws(string_block_contents)),
+        string_block(trim_leading_line_ws(string_block_contents)),
     )
 }
 
-fn shader_source<'a, E>(shader_tag: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, String, E>
+fn named_block<'a, F, O, E>(
+    name: &'a str,
+    parser: F,
+) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
+    F: 'a + FnMut(&'a str) -> IResult<&'a str, O, E>,
+    O: 'a,
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    leading_comments(named_string_block(shader_tag))
+    named(name, block(parser))
 }
 
-fn optional_shader_source<'a, E>(
-    input: &'a str,
-) -> IResult<&'a str, Option<OptionalShaderSource>, E>
+fn maybe_named_block<'a, F, O, E>(
+    name: &'a str,
+    parser: F,
+) -> impl FnMut(&'a str) -> IResult<&'a str, Option<O>, E>
+where
+    F: 'a + FnMut(&'a str) -> IResult<&'a str, O, E>,
+    O: 'a,
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
+{
+    opt(named(name, block(parser)))
+}
+
+fn named_value<'a, F, O, E>(
+    name: &'a str,
+    parser: F,
+) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
+where
+    F: 'a + FnMut(&'a str) -> IResult<&'a str, O, E>,
+    O: 'a,
+    E: 'a + ParseError<&'a str>,
+{
+    separated_value(ws(tag(name)), ws(tag(VALUE_SEPARATOR_TAG)), parser)
+}
+
+fn maybe_named_value<'a, F, O, E>(
+    name: &'a str,
+    parser: F,
+) -> impl FnMut(&'a str) -> IResult<&'a str, Option<O>, E>
+where
+    F: 'a + FnMut(&'a str) -> IResult<&'a str, O, E>,
+    O: 'a,
+    E: 'a + ParseError<&'a str>,
+{
+    opt(named_value(name, parser))
+}
+
+fn entry_point<'a, E>(name: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    let tesselation_ctrl = shader_source(TESSELATION_CONTROL_SHADER_TAG);
-    let tesselation_eval = shader_source(TESSELATION_EVALUATION_SHADER_TAG);
-    let geometry = shader_source(GEOMETRY_SHADER_TAG);
-    let tesselation_block = leading_comments(named(
-        TESSELATION_BLOCK_TAG,
-        block(permutation((tesselation_ctrl, tesselation_eval))),
-    ));
+    named_value(name, string)
+}
 
-    let tesselation = map(tesselation_block, |(control, evaluation)| {
-        OptionalShaderSource::Tesselation {
+fn maybe_entry_point<'a, E>(
+    name: &'a str,
+) -> impl FnMut(&'a str) -> IResult<&'a str, Option<&'a str>, E>
+where
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
+{
+    opt(named_value(name, string))
+}
+
+fn optional_entry_points<'a, E>(
+    input: &'a str,
+) -> IResult<&'a str, Option<OptionalShaderEntryPoints>, E>
+where
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
+{
+    let geometry = map(
+        entry_point(GEOMETRY_ENTRY_TAG),
+        OptionalShaderEntryPoints::Geometry,
+    );
+    let tesselation = map(
+        named_block(
+            TESSELATION_BLOCK_TAG,
+            pair(
+                entry_point(TESSELATION_CONTROL_ENTRY_TAG),
+                entry_point(TESSELATION_EVALUATION_ENTRY_TAG),
+            ),
+        ),
+        |(control, evaluation)| OptionalShaderEntryPoints::Tesselation {
             control,
             evaluation,
-        }
-    });
+        },
+    );
 
-    opt(alt((
-        map(geometry, OptionalShaderSource::Geometry),
-        tesselation,
-    )))(input)
+    opt(alt((geometry, tesselation)))(input)
 }
 
-fn shader_sources<'a, E>(input: &'a str) -> IResult<&'a str, ShadersSources, E>
+fn entry_points<'a, E>(input: &'a str) -> IResult<&'a str, ShaderEntryPoints, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    let mut parser = map(
+    let vertex = entry_point(VERTEX_ENTRY_TAG);
+    let fragment = entry_point(FRAGMENT_ENTRY_TAG);
+
+    let parser = map(
         permutation((
-            shader_source(VERTEX_SHADER_TAG),
-            shader_source(FRAGMENT_SHADER_TAG),
-            optional_shader_source,
-            optional_shader_source,
-            optional_shader_source,
+            vertex,
+            fragment,
+            optional_entry_points,
+            optional_entry_points,
         )),
-        |(vertex, fragment, opt1, opt2, opt3)| {
-            let mut shaders = ShadersSources {
+        |(vertex, fragment, opt1, opt2)| {
+            let mut entry_points = ShaderEntryPoints {
                 vertex,
                 fragment,
                 ..Default::default()
             };
 
-            for opt_shader in vec![opt1, opt2, opt3] {
-                if let Some(source) = opt_shader {
-                    match source {
-                        OptionalShaderSource::Geometry(s) => shaders.geometry = Some(s),
-                        OptionalShaderSource::Tesselation {
+            for opt_entry_point in vec![opt1, opt2] {
+                if let Some(entry_point) = opt_entry_point {
+                    match entry_point {
+                        OptionalShaderEntryPoints::Geometry(geom) => {
+                            entry_points.geometry = Some(geom)
+                        }
+                        OptionalShaderEntryPoints::Tesselation {
                             control,
                             evaluation,
                         } => {
-                            shaders.tesselation = Some(Tesselation {
+                            entry_points.tesselation = Some(Tesselation {
                                 control,
                                 evaluation,
                             })
@@ -298,11 +359,21 @@ where
                 }
             }
 
-            shaders
+            entry_points
         },
     );
 
-    parser(input)
+    leading_comments(named_block(ENTRY_POINT_TAG, parser))(input)
+}
+
+fn shader_source<'a, E>(input: &'a str) -> IResult<&'a str, ShaderSource, E>
+where
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
+{
+    leading_comments(alt((
+        map(named_string_block(GLSL_TAG), ShaderSource::Glsl),
+        map(named_string_block(HLSL_TAG), ShaderSource::Hlsl),
+    )))(input)
 }
 
 pub fn separated_value<'a, I, O1, O2, O3, E, F, G, H>(
@@ -319,17 +390,18 @@ where
     preceded(before, preceded(separator, value_parser))
 }
 
-fn name<'a, E>(input: &'a str) -> IResult<&'a str, String, E>
+fn name<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    leading_comments(map(
-        separated_value(ws(tag(NAME_TAG)), ws(tag(VALUE_SEPARATOR_TAG)), ws(string)),
-        String::from,
+    leading_comments(separated_value(
+        ws(tag(NAME_TAG)),
+        ws(tag(VALUE_SEPARATOR_TAG)),
+        ws(string),
     ))(input)
 }
 
-fn maybe_name<'a, E>(input: &'a str) -> IResult<&'a str, Option<String>, E>
+fn maybe_name<'a, E>(input: &'a str) -> IResult<&'a str, Option<&'a str>, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
@@ -354,12 +426,51 @@ where
     leading_comments(named_string_block(INCLUDE_TAG))(input)
 }
 
+fn pass_misc_value<'a, E>(input: &'a str) -> IResult<&'a str, Option<PassMisc>, E>
+where
+    E: 'a + ParseError<&'a str> + ContextError<&'a str>,
+{
+    opt(alt((
+        map(name, PassMisc::Name),
+        map(entry_points, PassMisc::EntryPoints),
+    )))(input)
+}
+
 fn pass<'a, E>(input: &'a str) -> IResult<&'a str, Pass, E>
 where
     E: 'a + ParseError<&'a str> + ContextError<&'a str>,
 {
-    let parse_pass = leading_comments(named(PASS_TAG, block(tuple((maybe_name, shader_sources)))));
-    map(parse_pass, |(name, shaders)| Pass { name, shaders })(input)
+    let misc_section = map(
+        permutation((pass_misc_value, pass_misc_value)),
+        |(opt1, opt2)| {
+            let mut maybe_name = None;
+            let mut maybe_entry_points = None;
+
+            for opt in vec![opt1, opt2] {
+                if let Some(value) = opt {
+                    match value {
+                        PassMisc::Name(name) => maybe_name = Some(name),
+                        PassMisc::EntryPoints(entry_points) => {
+                            maybe_entry_points = Some(entry_points)
+                        }
+                    }
+                }
+            }
+
+            (maybe_name, maybe_entry_points)
+        },
+    );
+
+    let parse_pass = leading_comments(named(PASS_TAG, block(pair(misc_section, shader_source))));
+
+    map(
+        parse_pass,
+        |((name, shader_entry_points), shader_source)| Pass {
+            name,
+            shader_entry_points,
+            shader_source,
+        },
+    )(input)
 }
 
 fn passes<'a, E>(input: &'a str) -> IResult<&'a str, Vec<Pass>, E>
@@ -374,7 +485,7 @@ where
     E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError>,
 {
     let parse_val = alt((
-        value(RenderQueue::Opaque, ws(tag(RENDER_QUEUE_OPAQUE_TAG))),
+        map(tag(RENDER_QUEUE_OPAQUE_TAG), |_| RenderQueue::Opaque),
         map(
             preceded(
                 tag(RENDER_QUEUE_TRANSPARENT_TAG),
@@ -404,6 +515,7 @@ where
         map(name, SubShaderMisc::Name),
         map(lod, SubShaderMisc::Lod),
         map(include, SubShaderMisc::Include),
+        map(entry_points, SubShaderMisc::EntryPoints),
     )))(input)
 }
 
@@ -417,33 +529,45 @@ where
             sub_shader_misc_value,
             sub_shader_misc_value,
             sub_shader_misc_value,
+            sub_shader_misc_value,
         )),
-        |(render_queue, opt1, opt2, opt3)| {
+        |(render_queue, opt1, opt2, opt3, opt4)| {
             let mut maybe_name = None;
             let mut maybe_lod = None;
             let mut maybe_include = None;
+            let mut maybe_entry_points = None;
 
-            for opt in vec![opt1, opt2, opt3] {
+            for opt in vec![opt1, opt2, opt3, opt4] {
                 if let Some(value) = opt {
                     match value {
                         SubShaderMisc::Name(name) => maybe_name = Some(name),
                         SubShaderMisc::Include(include) => maybe_include = Some(include),
                         SubShaderMisc::Lod(lod) => maybe_lod = Some(lod),
+                        SubShaderMisc::EntryPoints(entry_points) => {
+                            maybe_entry_points = Some(entry_points)
+                        }
                     }
                 }
             }
 
-            (render_queue, maybe_name, maybe_include, maybe_lod)
+            (
+                render_queue,
+                maybe_name,
+                maybe_include,
+                maybe_lod,
+                maybe_entry_points,
+            )
         },
     );
 
     let contents = map(
         pair(top_section, passes),
-        |((render_queue, name, include, lod), passes)| SubShader {
+        |((render_queue, name, include, lod, shader_entry_points), passes)| SubShader {
             name,
             lod,
             render_queue,
             include,
+            shader_entry_points,
             passes,
         },
     );
@@ -462,12 +586,13 @@ pub fn shader<'a, E>(input: &'a str) -> IResult<&'a str, Shader, E>
 where
     E: 'a + ParseError<&'a str> + FromExternalError<&'a str, ParseIntError> + ContextError<&'a str>,
 {
-    let top_section = permutation((name, opt(include)));
+    let top_section = permutation((name, opt(include), opt(entry_points)));
     let contents = map(
         pair(top_section, sub_shaders),
-        |((name, include), sub_shaders)| Shader {
+        |((name, include, shader_entry_points), sub_shaders)| Shader {
             name,
             include,
+            shader_entry_points,
             sub_shaders,
         },
     );
@@ -479,6 +604,7 @@ where
 
 mod tests {
     use super::*;
+    use crate::ShaderSource::Glsl;
     use nom::error::convert_error;
 
     #[test]
@@ -534,13 +660,13 @@ mod tests {
     #[test]
     fn test_named_string_block() {
         let input = r#"
-            vertex ("
+            glsl ("
                 layout(location = 0) in vec3 attrPos;
-
+    
                 struct Foo {
                     vec3 bla;
                 };
-
+    
                 void main()
                 {
                     #define FOO #include "bla" int bla = (1 + 1) / 2 * 10;
@@ -560,7 +686,7 @@ mod tests {
             named_string_block::<VerboseError<&str>>(tag)(input)
         };
 
-        match f(VERTEX_SHADER_TAG, input) {
+        match f(GLSL_TAG, input) {
             Err(nom::Err::Failure(e)) | Err(nom::Err::Error(e)) => {
                 println!("{}", convert_error(input, e));
                 panic!("Parse error!")
@@ -575,84 +701,39 @@ mod tests {
     }
 
     #[test]
-    fn test_shaders() {
-        let input = r#"
-            // Test comment
-            /**
-            * Test comment
-            */
-            
-            // Test comment
-            vertex ("
-                //Test comment
-                /*Test comment
-                * hello
-                */
-                /* Test comment */
-                #define FOO #include "bla" int bla = (1 + 1) / 2 * 10;
-            ")
-            
-            fragment ("
-                bla
-            ")"#;
-
-        let exp_vert = r#"//Test comment
-                /*Test comment
-                * hello
-                */
-                /* Test comment */
-                #define FOO #include "bla" int bla = (1 + 1) / 2 * 10;"#;
-
-        let expected = ShadersSources {
-            vertex: transform_multi_line_str(exp_vert),
-            fragment: "bla".to_string(),
-            geometry: None,
-            tesselation: None,
-        };
-
-        let (_, res) = shader_sources::<VerboseError<&str>>(input).unwrap();
-        assert_eq!(expected, res)
-    }
-
-    #[test]
     fn test_pass() {
         let input = r#"pass (
                 name: "MyPass"
-             
-                fragment ("
-                    #define FOO #include "bla" int bla = (1 + 1) / 2 * 10;
-                ")
                 
-                geometry ("
-                    geom
-                ")
-                
-                vertex ("
-                    foo
-                ")
-                
-                tesselation (
-                    control ("
-                        ctrl
-                    ")
-                    
-                    evaluation ("
-                        eval
-                    ")
+                entry_points (
+                    vertex: "vert"
+                    fragment: "frag"
+                    geometry: "geom"
+                    tesselation (
+                        control: "tess_ctrl"
+                        evaluation: "tess_eval"
+                    )
                 )
+                
+                glsl("
+                    glsl_source
+                    glsl_source
+                ")
+                
             )"#;
 
         let expected = Pass {
-            name: Some("MyPass".to_string()),
-            shaders: ShadersSources {
-                vertex: String::from("foo"),
-                fragment: String::from(r#"#define FOO #include "bla" int bla = (1 + 1) / 2 * 10;"#),
-                geometry: Some(String::from("geom")),
+            name: Some("MyPass"),
+            shader_entry_points: Some(ShaderEntryPoints {
+                vertex: "vert",
+                fragment: "frag",
+                geometry: Some("geom"),
                 tesselation: Some(Tesselation {
-                    control: String::from("ctrl"),
-                    evaluation: String::from("eval"),
+                    control: "tess_ctrl",
+                    evaluation: "tess_eval",
                 }),
-            },
+            }),
+            shader_source: Glsl(String::from("glsl_source\nglsl_source")),
         };
 
         let (_, res) = pass::<VerboseError<&str>>(input).unwrap();
@@ -682,7 +763,7 @@ mod tests {
     #[test]
     fn test_optional_name() {
         let input = r#"name:"My Foo""#;
-        let expected = Some("My Foo".to_string());
+        let expected = Some("My Foo");
 
         let (_, res) = maybe_name::<VerboseError<&str>>(input).unwrap();
         assert_eq!(expected, res)
@@ -695,62 +776,62 @@ mod tests {
              render_queue: Transparent(1)
              lod: 600
              name: "Sub Shader 1"
-                
+    
             include ("
                 #define MY_DEFINE
             ")
-            
+    
             // bla
             /*
              * foo
              * bla
              */
-     
+             entry_points (
+                vertex: "vert"
+                fragment: "frag"
+             )
+    
             pass ( /*
                 * foo
                 */
                     name: "Pass1" //foo
-             
-                    /*Bla*/vertex ("v1")
-                    
-                    fragment ("f1")
-                )
-            
-                pass (
-                    name: "Pass2"
-                    
-                    geometry ("g2")
-                    
-                    vertex ("v2")
-                    
-                    fragment ("f2")
-                )
+    
+                    glsl("
+                        glsl_code
+                        glsl_code
+                    ")
             )
+    
+            pass (
+                hlsl("
+                    hlsl_code
+                    hlsl_code
+                ")
+            )
+        )
         "#;
 
         let expected = SubShader {
-            name: Some("Sub Shader 1".to_string()),
+            name: Some("Sub Shader 1"),
             lod: Some(600),
             render_queue: RenderQueue::Transparent(1),
             include: Some("#define MY_DEFINE".to_string()),
+            shader_entry_points: Some(ShaderEntryPoints {
+                vertex: "vert",
+                fragment: "frag",
+                geometry: None,
+                tesselation: None,
+            }),
             passes: vec![
                 Pass {
-                    name: Some("Pass1".to_string()),
-                    shaders: ShadersSources {
-                        vertex: "v1".to_string(),
-                        fragment: "f1".to_string(),
-                        geometry: None,
-                        tesselation: None,
-                    },
+                    name: Some("Pass1"),
+                    shader_entry_points: None,
+                    shader_source: ShaderSource::Glsl(String::from("glsl_code\nglsl_code")),
                 },
                 Pass {
-                    name: Some("Pass2".to_string()),
-                    shaders: ShadersSources {
-                        vertex: "v2".to_string(),
-                        fragment: "f2".to_string(),
-                        geometry: Some("g2".to_string()),
-                        tesselation: None,
-                    },
+                    name: None,
+                    shader_entry_points: None,
+                    shader_source: ShaderSource::Hlsl(String::from("hlsl_code\nhlsl_code")),
                 },
             ],
         };
@@ -764,7 +845,7 @@ mod tests {
         let input = r#"
         shader (
             name: "Test Shader"
-            
+    
             include ("
                 #include "this.glsl"
             ")
@@ -772,16 +853,19 @@ mod tests {
             sub_shader(
                 name: "SubShader!1"
                 lod: 700
-                
+    
                 render_queue: Opaque
                 
+                entry_points (
+                    vertex: "vert"
+                    fragment: "frag"
+                )
+    
                 pass (
-                    vertex ("
-                        foo
-                    ")
-                    
-                    fragment("
-                        bla
+                    name: "Best pass"
+                    glsl("
+                        glsl_code
+                        glsl_code
                     ")
                 )
             )
@@ -789,21 +873,24 @@ mod tests {
         "#;
 
         let exp = Shader {
-            name: "Test Shader".to_string(),
+            name: "Test Shader",
             include: Some(r#"#include "this.glsl""#.to_string()),
+            shader_entry_points: None,
             sub_shaders: vec![SubShader {
-                name: Some("SubShader!1".to_string()),
+                name: Some("SubShader!1"),
                 lod: Some(700),
                 render_queue: RenderQueue::Opaque,
                 include: None,
+                shader_entry_points: Some(ShaderEntryPoints {
+                    vertex: "vert",
+                    fragment: "frag",
+                    geometry: None,
+                    tesselation: None,
+                }),
                 passes: vec![Pass {
-                    name: None,
-                    shaders: ShadersSources {
-                        vertex: transform_multi_line_str("foo"),
-                        fragment: transform_multi_line_str("bla"),
-                        geometry: None,
-                        tesselation: None,
-                    },
+                    name: Some("Best pass"),
+                    shader_entry_points: None,
+                    shader_source: ShaderSource::Glsl(String::from("glsl_code\nglsl_code")),
                 }],
             }],
         };

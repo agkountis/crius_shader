@@ -21,15 +21,15 @@ shader (
         lod: 600
 
         // Similar to Shaderlab's shader keywords for multi_compile directives
-        shader_features: [
-            "SHADER_FEATURE_NORMAL_MAPPING",
-            "SHADER_FEATURE_PARALLAX_OCCLUSION_MAPPING"
-        ]
+        shader_keywords (
+            (NORMAL_MAPPING_ON, NORMAL_MAPPING_OFF)
+            (_, SHADER_FEATURE_PARALLAX_OCCLUSION_MAPPING)
+        )
 
         // The render queue this shader should be rendered in.
-        // can be "Opaque" or "Transparent(n)" where n is a number in the range [0, n] to determine order 
+        // can be Opaque or Transparent(n) where n is a number in the range [0, n] to determine order 
         // for transparent rendering.
-        render_queue: "Opaque"
+        render_queue: Opaque
 
         include ("
             // Include block to be included to each pass of this sub-shader.
@@ -39,29 +39,45 @@ shader (
         pass (
             name: "My Pass"
 
-            vertex ("
-                // Vertex shader code goes here.
-            ")
-
-            fragment ("
-                // Fragment shader code goes here.
-            ")
-
-            // Optional
-            geometry ("
-                // Geometry shader goes here.
-            ")
-
-            // Optional
-            tesselation (
-                control ("
-                    // Tesselation control shader code goes here.
-                ")
-
-                evaluation ("
-                    // Tesselation evaluation shader code goes here.
-                ")
+            // Shader program entry points. 
+            // Defining entry points in the pass overrides any defined in the sub-shader level.
+            entry_points (
+                vertex: "vert"
+                fragment: "frag"
+                geometry: "geom"
+                tesselation (
+                    control: "tess_ctrl"
+                    evaluation: "tess_eval"
+                )
             )
+
+            glsl ("
+                void vert() 
+                {
+                    // Vertex program
+                }
+            
+                void frag()
+                {
+                    // Fragment program
+                }
+
+                void geom()
+                {
+                    // Geometry program
+                }
+
+                void tess_ctrl()
+                {
+                    // Tesselation control program
+                }
+
+                void tess_eval()
+                {
+                    // Tesselation evaluation program
+                }
+
+            ")
         )
     )
 )
